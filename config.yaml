@@ -1,0 +1,49 @@
+# Model Configuration
+model:
+  name: "microsoft/Phi-3-mini-4k-instruct"  # Options: "microsoft/Phi-3-mini-4k-instruct" or "mistralai/Mistral-7B-Instruct-v0.2"
+  max_seq_length: 2048
+
+# Dataset Configuration
+dataset:
+  source: "MLBtrio/genz-slang-dataset"
+  file: "all_slangs.csv"
+  raw_dir: "data/raw"
+  processed_dir: "data/processed"
+  training_dir: "data/training"
+
+# Training Configuration
+training:
+  learning_rate: 5e-5          # Reduced from 2e-4 (was too high for Phi-3)
+  batch_size: 4                 # Can reduce to 2 if OOM (out of memory)
+  gradient_accumulation_steps: 8  # Increased from 4
+  num_epochs: 3
+  warmup_steps: 50              # Increased from 10
+  logging_steps: 10
+  save_steps: 500
+  eval_steps: 500
+  lr_scheduler_type: "cosine"    # Better than linear for Phi-3
+  output_dir: "models/finetuned"
+  
+# LoRA Configuration
+lora:
+  r: 16
+  lora_alpha: 32
+  target_modules: ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
+  lora_dropout: 0.05
+  bias: "none"
+  task_type: "CAUSAL_LM"
+
+# Data Processing
+processing:
+  train_split: 0.9
+  val_split: 0.1
+  max_examples: null  # Set to number to limit, null for all
+  min_sentiment_confidence: 0.3
+
+# Paths
+paths:
+  data_raw: "data/raw"
+  data_processed: "data/processed"
+  data_training: "data/training"
+  models: "models"
+

@@ -1,0 +1,12 @@
+# Optional requirements for local fine-tuning
+# Only install if you have a GPU and want to fine-tune locally
+# For Mac/CPU users, use a service provider instead (Colab, Kaggle, etc.)
+
+# Unsloth for fine-tuning (GPU recommended)
+# Note: On Mac, xformers won't build, so use unsloth without colab-new extras
+unsloth>=2024.1
+
+# For GPU environments, you can also install:
+# bitsandbytes>=0.41.0  # For 4-bit quantization
+# unsloth[colab-new]>=2024.1  # Includes xformers (GPU only)
+

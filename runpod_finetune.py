@@ -161,6 +161,10 @@ def main():
         load_in_4bit=use_4bit,
         dtype=None,
     )
+    
+    # Set tokenizer padding
+    tokenizer.pad_token = tokenizer.eos_token
+    tokenizer.padding_side = "right"  # Important for training
 
     print(f"✓ Loaded model ({'4-bit' if use_4bit else '16-bit'})")
 

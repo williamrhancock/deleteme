@@ -69,11 +69,16 @@ def mistral_format(instruction, output):
     return f"[INST] {instruction} [/INST] {output} </s>"
 
 
-def format_batch(batch, model_name):
+def format_batch(batch, model_name, tokenizer=None):
+    """
+    Format batch using manual formatting.
+    For Phi-3, we use the exact chat template format.
+    """
     out = []
     fmt = phi3_format if "phi-3" in model_name.lower() else mistral_format
     for inst, outp in zip(batch["instruction"], batch["output"]):
-        out.append(fmt(inst, outp))
+        formatted = fmt(inst, outp)
+        out.append(formatted)
     return {"text": out}
 
 
@@ -194,13 +199,13 @@ def main():
     fmt_model_name = args.model_name
 
     train_ds = train_ds.map(
-        lambda b: format_batch(b, fmt_model_name),
+        lambda b: format_batch(b, fmt_model_name, tokenizer),
         batched=True,
         remove_columns=train_ds.column_names
     )
 
     val_ds = val_ds.map(
-        lambda b: format_batch(b, fmt_model_name),
+        lambda b: format_batch(b, fmt_model_name, tokenizer),
         batched=True,
         remove_columns=val_ds.column_names
     )
@@ -232,8 +237,11 @@ def main():
         eval_strategy="steps",
         eval_steps=500,  # Evaluate during training to catch overfitting
         load_best_model_at_end=True,  # Load best model based on eval loss
+        metric_for_best_model="eval_loss",  # Use eval_loss to select best model
+        greater_is_better=False,  # Lower eval_loss is better
         fp16=not use_4bit,
         report_to="none",  # Disable wandb/tensorboard
+        logging_first_step=True,  # Log the first step
     )
 
     trainer = SFTTrainer(

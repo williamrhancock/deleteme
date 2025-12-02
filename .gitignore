@@ -46,3 +46,12 @@ logs/
 # Config (if contains secrets)
 # config.yaml
 
+# SSH Keys - NEVER commit these!
+*.key
+*.key.pub
+*.pem
+*.pem.pub
+privkey.*
+here.key*
+*.runpod
+

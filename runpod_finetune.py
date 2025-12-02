@@ -16,7 +16,7 @@ import argparse
 import subprocess
 from pathlib import Path
 
-# Check and install dependencies if needed
+# Check and install dependencies if needed (without importing them)
 def check_and_install_dependencies():
     """Check for required packages and install if missing."""
     required_packages = {
@@ -29,9 +29,13 @@ def check_and_install_dependencies():
     
     missing = []
     for module_name, package_name in required_packages.items():
-        try:
-            __import__(module_name)
-        except ImportError:
+        # Check if package is installed without importing
+        result = subprocess.run(
+            [sys.executable, "-m", "pip", "show", package_name],
+            capture_output=True,
+            text=True
+        )
+        if result.returncode != 0:
             missing.append(package_name)
     
     if missing:
@@ -54,11 +58,6 @@ def check_and_install_dependencies():
                 ])
             
             print("✓ Dependencies installed successfully")
-            # Re-import after installation
-            for module_name in missing:
-                if module_name == 'unsloth':
-                    continue  # Will be imported below
-                __import__(module_name)
         except subprocess.CalledProcessError as e:
             print(f"❌ Failed to install dependencies: {e}")
             print("\nPlease install manually:")
@@ -70,12 +69,16 @@ def check_and_install_dependencies():
 # Check dependencies before importing
 check_and_install_dependencies()
 
-# Now import the packages
-import torch
-from datasets import Dataset
-from unsloth import FastLanguageModel
-from trl import SFTTrainer
-from transformers import TrainingArguments
+# CRITICAL: Import unsloth FIRST before any other ML libraries
+# This ensures all optimizations are applied
+import unsloth  # noqa: E402
+
+# Now import other packages
+import torch  # noqa: E402
+from datasets import Dataset  # noqa: E402
+from unsloth import FastLanguageModel  # noqa: E402
+from trl import SFTTrainer  # noqa: E402
+from transformers import TrainingArguments  # noqa: E402
 
 
 def load_jsonl(file_path):

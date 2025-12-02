@@ -13,7 +13,64 @@ import os
 import sys
 import json
 import argparse
+import subprocess
 from pathlib import Path
+
+# Check and install dependencies if needed
+def check_and_install_dependencies():
+    """Check for required packages and install if missing."""
+    required_packages = {
+        'torch': 'torch',
+        'datasets': 'datasets',
+        'transformers': 'transformers',
+        'unsloth': 'unsloth',
+        'trl': 'trl',
+    }
+    
+    missing = []
+    for module_name, package_name in required_packages.items():
+        try:
+            __import__(module_name)
+        except ImportError:
+            missing.append(package_name)
+    
+    if missing:
+        print(f"⚠️  Missing required packages: {', '.join(missing)}")
+        print("Installing missing packages...")
+        try:
+            # Install standard packages
+            standard_packages = [pkg for pkg in missing if pkg != 'unsloth']
+            if standard_packages:
+                subprocess.check_call([
+                    sys.executable, "-m", "pip", "install", "-q"
+                ] + standard_packages)
+            
+            # Install unsloth separately (from git)
+            if 'unsloth' in missing:
+                print("Installing Unsloth from GitHub...")
+                subprocess.check_call([
+                    sys.executable, "-m", "pip", "install", "-q",
+                    "unsloth @ git+https://github.com/unslothai/unsloth.git"
+                ])
+            
+            print("✓ Dependencies installed successfully")
+            # Re-import after installation
+            for module_name in missing:
+                if module_name == 'unsloth':
+                    continue  # Will be imported below
+                __import__(module_name)
+        except subprocess.CalledProcessError as e:
+            print(f"❌ Failed to install dependencies: {e}")
+            print("\nPlease install manually:")
+            print(f"  pip install {' '.join(missing)}")
+            if 'unsloth' in missing:
+                print("  pip install 'unsloth @ git+https://github.com/unslothai/unsloth.git'")
+            sys.exit(1)
+
+# Check dependencies before importing
+check_and_install_dependencies()
+
+# Now import the packages
 import torch
 from datasets import Dataset
 from unsloth import FastLanguageModel

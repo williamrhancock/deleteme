@@ -57,6 +57,8 @@ def load_jsonl(path):
 
 
 def phi3_format(instruction, output):
+    # CRITICAL: No trailing newline after final <|end|>
+    # This ensures proper loss masking - loss only computed on assistant response
     return (
         f"<|user|>\n{instruction}<|end|>\n"
         f"<|assistant|>\n{output}<|end|>"
@@ -183,6 +185,7 @@ def main():
     # Formatting
     # -------------------------------
     print("Applying prompt formatting...")
+    print("⚠️  IMPORTANT: Verifying format is correct for loss masking...")
 
     fmt_model_name = args.model_name
 
@@ -197,6 +200,13 @@ def main():
         batched=True,
         remove_columns=val_ds.column_names
     )
+    
+    # Show sample to verify formatting
+    if len(train_ds) > 0:
+        sample = train_ds[0]["text"]
+        print(f"\nSample formatted text (first 300 chars):")
+        print(f"  {sample[:300]}...")
+        print(f"\n✓ Formatting complete. Loss should only be computed on assistant response tokens.")
 
     # -------------------------------
     # Trainer

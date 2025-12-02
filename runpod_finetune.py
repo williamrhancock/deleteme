@@ -213,9 +213,13 @@ def main():
         learning_rate=args.learning_rate,
         lr_scheduler_type="cosine",
         logging_steps=args.logging_steps,
-        save_strategy="epoch",
-        eval_strategy="epoch",
+        save_strategy="steps",
+        save_steps=500,  # Save checkpoints during training
+        eval_strategy="steps",
+        eval_steps=500,  # Evaluate during training to catch overfitting
+        load_best_model_at_end=True,  # Load best model based on eval loss
         fp16=not use_4bit,
+        report_to="none",  # Disable wandb/tensorboard
     )
 
     trainer = SFTTrainer(

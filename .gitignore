@@ -17,8 +17,8 @@ data/training/
 *.jsonl
 *.parquet
 
-# Models
-models/
+# Models - ignore large model files but allow directory structure
+# models/  # Commented out to allow tracking directory structure
 *.bin
 *.safetensors
 *.pt

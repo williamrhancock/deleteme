@@ -13,9 +13,14 @@ ENV/
 # data/raw/  # Commented out to allow tracking directory structure
 # data/processed/  # Commented out to allow tracking directory structure
 # data/training/  # Commented out to allow tracking directory structure
-# Keep ignoring large data files
-*.csv
+
+# Ignore JSONL files by default
 *.jsonl
+# But allow training data files
+!data/training/*.jsonl
+
+# Keep ignoring other large data files
+*.csv
 *.parquet
 
 # Models - ignore large model files but allow directory structure

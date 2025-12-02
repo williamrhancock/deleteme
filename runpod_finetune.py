@@ -16,31 +16,96 @@ import argparse
 import subprocess
 from pathlib import Path
 
+# Try to import packaging for version comparison
+try:
+    from packaging import version
+except ImportError:
+    # Install packaging if missing
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "-q", "packaging"])
+    from packaging import version
+
 # Check and install dependencies if needed (without importing them)
 def check_and_install_dependencies():
-    """Check for required packages and install if missing."""
-    required_packages = {
-        'torch': 'torch',
-        'datasets': 'datasets',
-        'transformers': 'transformers',
-        'unsloth': 'unsloth',
-        'trl': 'trl',
-    }
+    """Check for required packages and install if missing with correct versions."""
+    print("Checking dependencies...")
     
-    missing = []
-    for module_name, package_name in required_packages.items():
-        # Check if package is installed without importing
+    # Check if packages are installed and get versions
+    def get_package_version(package_name):
         result = subprocess.run(
             [sys.executable, "-m", "pip", "show", package_name],
             capture_output=True,
             text=True
         )
         if result.returncode != 0:
+            return None
+        for line in result.stdout.split('\n'):
+            if line.startswith('Version:'):
+                return line.split(':', 1)[1].strip()
+        return None
+    
+    # Check versions and upgrade if needed
+    needs_upgrade = False
+    
+    # Check torch version (unsloth requires >=2.4.0)
+    torch_version = get_package_version('torch')
+    if torch_version:
+        from packaging import version
+        if version.parse(torch_version) < version.parse('2.4.0'):
+            print(f"⚠️  torch {torch_version} is installed, but unsloth requires >=2.4.0")
+            needs_upgrade = True
+    else:
+        needs_upgrade = True
+    
+    # Check triton version (unsloth requires >=3.0.0 on Linux)
+    if sys.platform == 'linux':
+        triton_version = get_package_version('triton')
+        if triton_version:
+            from packaging import version
+            if version.parse(triton_version) < version.parse('3.0.0'):
+                print(f"⚠️  triton {triton_version} is installed, but unsloth requires >=3.0.0")
+                needs_upgrade = True
+        else:
+            needs_upgrade = True
+    
+    # Upgrade torch and triton first if needed
+    if needs_upgrade:
+        print("Upgrading torch and triton to compatible versions...")
+        try:
+            # Upgrade torch to latest (will satisfy >=2.4.0 requirement)
+            subprocess.check_call([
+                sys.executable, "-m", "pip", "install", "--upgrade", "-q",
+                "torch", "torchvision", "torchaudio"
+            ])
+            # Upgrade triton on Linux
+            if sys.platform == 'linux':
+                subprocess.check_call([
+                    sys.executable, "-m", "pip", "install", "--upgrade", "-q",
+                    "triton>=3.0.0"
+                ])
+            print("✓ torch and triton upgraded")
+        except subprocess.CalledProcessError as e:
+            print(f"⚠️  Failed to upgrade torch/triton: {e}")
+            print("Continuing anyway...")
+    
+    # Check for other required packages
+    required_packages = {
+        'datasets': 'datasets',
+        'transformers': 'transformers',
+        'trl': 'trl',
+    }
+    
+    missing = []
+    for package_name in required_packages.values():
+        if get_package_version(package_name) is None:
             missing.append(package_name)
     
+    # Check for unsloth
+    unsloth_version = get_package_version('unsloth')
+    if unsloth_version is None:
+        missing.append('unsloth')
+    
     if missing:
-        print(f"⚠️  Missing required packages: {', '.join(missing)}")
-        print("Installing missing packages...")
+        print(f"Installing missing packages: {', '.join(missing)}...")
         try:
             # Install standard packages
             standard_packages = [pkg for pkg in missing if pkg != 'unsloth']
@@ -61,10 +126,15 @@ def check_and_install_dependencies():
         except subprocess.CalledProcessError as e:
             print(f"❌ Failed to install dependencies: {e}")
             print("\nPlease install manually:")
+            print("  pip install --upgrade torch torchvision torchaudio")
+            if sys.platform == 'linux':
+                print("  pip install --upgrade 'triton>=3.0.0'")
             print(f"  pip install {' '.join(missing)}")
             if 'unsloth' in missing:
                 print("  pip install 'unsloth @ git+https://github.com/unslothai/unsloth.git'")
             sys.exit(1)
+    else:
+        print("✓ All dependencies are installed")
 
 # Check dependencies before importing
 check_and_install_dependencies()

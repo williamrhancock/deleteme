@@ -92,6 +92,7 @@ def check_and_install_dependencies():
         'datasets': 'datasets',
         'transformers': 'transformers',
         'trl': 'trl',
+        'bitsandbytes': 'bitsandbytes',  # Required for 4-bit quantization
     }
     
     missing = []
@@ -107,6 +108,15 @@ def check_and_install_dependencies():
     if missing:
         print(f"Installing missing packages: {', '.join(missing)}...")
         try:
+            # Install bitsandbytes first (if missing) - required for Unsloth
+            if 'bitsandbytes' in missing:
+                print("Installing bitsandbytes (required for 4-bit quantization)...")
+                subprocess.check_call([
+                    sys.executable, "-m", "pip", "install", "-q",
+                    "bitsandbytes"
+                ])
+                missing.remove('bitsandbytes')
+            
             # Install standard packages
             standard_packages = [pkg for pkg in missing if pkg != 'unsloth']
             if standard_packages:
@@ -114,7 +124,7 @@ def check_and_install_dependencies():
                     sys.executable, "-m", "pip", "install", "-q"
                 ] + standard_packages)
             
-            # Install unsloth separately (from git)
+            # Install unsloth separately (from git) - must be last
             if 'unsloth' in missing:
                 print("Installing Unsloth from GitHub...")
                 subprocess.check_call([
@@ -129,7 +139,8 @@ def check_and_install_dependencies():
             print("  pip install --upgrade torch torchvision torchaudio")
             if sys.platform == 'linux':
                 print("  pip install --upgrade 'triton>=3.0.0'")
-            print(f"  pip install {' '.join(missing)}")
+            print("  pip install bitsandbytes")
+            print(f"  pip install {' '.join([p for p in missing if p != 'unsloth'])}")
             if 'unsloth' in missing:
                 print("  pip install 'unsloth @ git+https://github.com/unslothai/unsloth.git'")
             sys.exit(1)

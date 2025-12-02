@@ -9,10 +9,11 @@ env/
 ENV/
 .venv
 
-# Data
-data/raw/
-data/processed/
-data/training/
+# Data - allow directory structure but ignore large data files
+# data/raw/  # Commented out to allow tracking directory structure
+# data/processed/  # Commented out to allow tracking directory structure
+# data/training/  # Commented out to allow tracking directory structure
+# Keep ignoring large data files
 *.csv
 *.jsonl
 *.parquet

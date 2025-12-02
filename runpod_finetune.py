@@ -1,464 +1,238 @@
 #!/usr/bin/env python3
 """
-Fine-tune Phi-3-mini or Mistral-7B using Unsloth on RunPod CLI.
-
-Usage:
-    python runpod_finetune.py --train-path /workspace/train.jsonl --val-path /workspace/val.jsonl --output-dir /workspace/models/finetuned
-    
-    # Or with config.yaml:
-    python runpod_finetune.py --config config.yaml
+Clean, production-safe fine-tuning script for Phi-3 / Mistral on RunPod using Unsloth.
 """
 
 import os
 import sys
 import json
 import argparse
-import subprocess
 from pathlib import Path
 
-# Try to import packaging for version comparison
-try:
-    from packaging import version
-except ImportError:
-    # Install packaging if missing
-    subprocess.check_call([sys.executable, "-m", "pip", "install", "-q", "packaging"])
-    from packaging import version
+# -------------------------------
+# Minimal dependency validation
+# -------------------------------
 
-# Check and install dependencies if needed (without importing them)
-def check_and_install_dependencies():
-    """Check for required packages and install if missing with correct versions."""
-    print("Checking dependencies...")
-    
-    # Check if packages are installed and get versions
-    def get_package_version(package_name):
-        result = subprocess.run(
-            [sys.executable, "-m", "pip", "show", package_name],
-            capture_output=True,
-            text=True
-        )
-        if result.returncode != 0:
-            return None
-        for line in result.stdout.split('\n'):
-            if line.startswith('Version:'):
-                return line.split(':', 1)[1].strip()
-        return None
-    
-    # Check versions and upgrade if needed
-    needs_upgrade = False
-    
-    # Check torch version (unsloth requires >=2.4.0)
-    torch_version = get_package_version('torch')
-    if torch_version:
-        from packaging import version
-        if version.parse(torch_version) < version.parse('2.4.0'):
-            print(f"⚠️  torch {torch_version} is installed, but unsloth requires >=2.4.0")
-            needs_upgrade = True
-    else:
-        needs_upgrade = True
-    
-    # Check triton version (unsloth requires >=3.0.0 on Linux)
-    if sys.platform == 'linux':
-        triton_version = get_package_version('triton')
-        if triton_version:
-            from packaging import version
-            if version.parse(triton_version) < version.parse('3.0.0'):
-                print(f"⚠️  triton {triton_version} is installed, but unsloth requires >=3.0.0")
-                needs_upgrade = True
-        else:
-            needs_upgrade = True
-    
-    # Upgrade torch and triton first if needed
-    if needs_upgrade:
-        print("Upgrading torch and triton to compatible versions...")
-        try:
-            # Upgrade torch to latest (will satisfy >=2.4.0 requirement)
-            subprocess.check_call([
-                sys.executable, "-m", "pip", "install", "--upgrade", "-q",
-                "torch", "torchvision", "torchaudio"
-            ])
-            # Upgrade triton on Linux
-            if sys.platform == 'linux':
-                subprocess.check_call([
-                    sys.executable, "-m", "pip", "install", "--upgrade", "-q",
-                    "triton>=3.0.0"
-                ])
-            print("✓ torch and triton upgraded")
-        except subprocess.CalledProcessError as e:
-            print(f"⚠️  Failed to upgrade torch/triton: {e}")
-            print("Continuing anyway...")
-    
-    # Check for other required packages
-    required_packages = {
-        'datasets': 'datasets',
-        'transformers': 'transformers',
-        'trl': 'trl',
-        'bitsandbytes': 'bitsandbytes',  # Required for 4-bit quantization
-    }
-    
-    missing = []
-    for package_name in required_packages.values():
-        if get_package_version(package_name) is None:
-            missing.append(package_name)
-    
-    # Check for unsloth
-    unsloth_version = get_package_version('unsloth')
-    if unsloth_version is None:
-        missing.append('unsloth')
-    
-    if missing:
-        print(f"Installing missing packages: {', '.join(missing)}...")
-        try:
-            # Install bitsandbytes first (if missing) - required for Unsloth
-            if 'bitsandbytes' in missing:
-                print("Installing bitsandbytes (required for 4-bit quantization)...")
-                subprocess.check_call([
-                    sys.executable, "-m", "pip", "install", "-q",
-                    "bitsandbytes"
-                ])
-                missing.remove('bitsandbytes')
-            
-            # Install standard packages
-            standard_packages = [pkg for pkg in missing if pkg != 'unsloth']
-            if standard_packages:
-                subprocess.check_call([
-                    sys.executable, "-m", "pip", "install", "-q"
-                ] + standard_packages)
-            
-            # Install unsloth separately (from git) - must be last
-            if 'unsloth' in missing:
-                print("Installing Unsloth from GitHub...")
-                subprocess.check_call([
-                    sys.executable, "-m", "pip", "install", "-q",
-                    "unsloth @ git+https://github.com/unslothai/unsloth.git"
-                ])
-            
-            print("✓ Dependencies installed successfully")
-        except subprocess.CalledProcessError as e:
-            print(f"❌ Failed to install dependencies: {e}")
-            print("\nPlease install manually:")
-            print("  pip install --upgrade torch torchvision torchaudio")
-            if sys.platform == 'linux':
-                print("  pip install --upgrade 'triton>=3.0.0'")
-            print("  pip install bitsandbytes")
-            print(f"  pip install {' '.join([p for p in missing if p != 'unsloth'])}")
-            if 'unsloth' in missing:
-                print("  pip install 'unsloth @ git+https://github.com/unslothai/unsloth.git'")
-            sys.exit(1)
-    else:
-        print("✓ All dependencies are installed")
+def ensure_import(pkg, pip_name=None):
+    pip_name = pip_name or pkg
+    try:
+        __import__(pkg)
+    except ImportError:
+        print(f"⚠️  Missing package '{pip_name}', installing...")
+        os.system(f"{sys.executable} -m pip install -q {pip_name}")
+        __import__(pkg)
 
-# Check dependencies before importing
-check_and_install_dependencies()
+ensure_import("unsloth", "unsloth @ git+https://github.com/unslothai/unsloth.git")
+ensure_import("datasets")
+ensure_import("transformers")
+ensure_import("trl")
+ensure_import("bitsandbytes")
 
-# CRITICAL: Import unsloth FIRST before any other ML libraries
-# This ensures all optimizations are applied
-import unsloth  # noqa: E402
-
-# Now import other packages
-import torch  # noqa: E402
-from datasets import Dataset  # noqa: E402
-from unsloth import FastLanguageModel  # noqa: E402
-from trl import SFTTrainer  # noqa: E402
-from transformers import TrainingArguments  # noqa: E402
+import torch
+from datasets import Dataset
+from unsloth import FastLanguageModel
+from transformers import TrainingArguments
+from trl import SFTTrainer
 
 
-def load_jsonl(file_path):
-    """Load data from JSONL file."""
+# -------------------------------
+# Utility functions
+# -------------------------------
+
+def load_jsonl(path):
+    if not os.path.exists(path):
+        raise FileNotFoundError(f"JSONL file not found: {path}")
+
     data = []
-    with open(file_path, 'r', encoding='utf-8') as f:
+    with open(path, "r", encoding="utf-8") as f:
         for line in f:
             if line.strip():
-                data.append(json.loads(line))
+                obj = json.loads(line)
+                if not all(k in obj for k in ("instruction", "output")):
+                    raise ValueError(
+                        f"Each JSONL entry must have 'instruction' and 'output'. Offending entry:\n{obj}"
+                    )
+                data.append(obj)
     return data
 
 
-def formatting_prompts_func(examples, model_name):
-    """
-    Format examples using the official Phi-3 chat template.
-    
-    CRITICAL: Phi-3 format must NOT have trailing newline after <|end|>
-    The model expects: <|user|>\n{instruction}<|end|>\n<|assistant|>\n{output}<|end|>
-    """
-    instructions = examples["instruction"]
-    outputs = examples["output"]
-    texts = []
-    
-    for instruction, output in zip(instructions, outputs):
-        # OFFICIAL PHI-3 CHAT TEMPLATE (no trailing newline after <|end|>)
-        if "Phi-3" in model_name:
-            text = f"<|user|>\n{instruction}<|end|>\n<|assistant|>\n{output}<|end|>"
+def phi3_format(instruction, output):
+    return (
+        f"<|user|>\n{instruction}<|end|>\n"
+        f"<|assistant|>\n{output}<|end|>"
+    )
+
+
+def mistral_format(instruction, output):
+    return f"[INST] {instruction} [/INST] {output} </s>"
+
+
+def format_batch(batch, model_name):
+    out = []
+    fmt = phi3_format if "phi-3" in model_name.lower() else mistral_format
+    for inst, outp in zip(batch["instruction"], batch["output"]):
+        out.append(fmt(inst, outp))
+    return {"text": out}
+
+
+def detect_lora_modules(model):
+    wanted = [
+        "q_proj", "k_proj", "v_proj",
+        "o_proj", "gate_proj", "up_proj", "down_proj"
+    ]
+    found = []
+    missing = []
+
+    for w in wanted:
+        if any(w in name for name, _ in model.named_modules()):
+            found.append(w)
         else:
-            # Mistral format
-            text = f"[INST] {instruction} [/INST] {output} </s>"
-        texts.append(text)
-    
-    return {"text": texts}
+            missing.append(w)
+
+    if missing:
+        print(f"⚠️ Warning: Missing LoRA modules in this model: {missing}")
+    return found
 
 
-def detect_base_dir():
-    """Auto-detect base directory (RunPod /workspace, Colab /content, or current dir)."""
-    if os.path.exists("/workspace"):  # RunPod
-        return "/workspace"
-    elif os.path.exists("/content"):  # Colab
-        return "/content"
-    else:  # Default
-        return os.getcwd()
-
+# -------------------------------
+# Main training entrypoint
+# -------------------------------
 
 def main():
-    parser = argparse.ArgumentParser(description="Fine-tune Phi-3 or Mistral with Unsloth")
-    
-    # Path arguments
-    parser.add_argument("--train-path", type=str, help="Path to train.jsonl file")
-    parser.add_argument("--val-path", type=str, help="Path to val.jsonl file")
-    parser.add_argument("--output-dir", type=str, help="Output directory for model")
-    parser.add_argument("--base-dir", type=str, help="Base directory (auto-detected if not provided)")
-    
-    # Model arguments
-    parser.add_argument("--model-name", type=str, default="microsoft/Phi-3-mini-4k-instruct",
-                       help="Model name (default: microsoft/Phi-3-mini-4k-instruct)")
-    parser.add_argument("--max-seq-length", type=int, default=2048,
-                       help="Maximum sequence length (default: 2048)")
-    
-    # LoRA arguments
-    parser.add_argument("--lora-r", type=int, default=16, help="LoRA r (default: 16)")
-    parser.add_argument("--lora-alpha", type=int, default=32, help="LoRA alpha (default: 32)")
-    parser.add_argument("--lora-dropout", type=float, default=0.05, help="LoRA dropout (default: 0.05)")
-    
-    # Training arguments (optimized for Phi-3)
-    parser.add_argument("--learning-rate", type=float, default=5e-5,
-                       help="Learning rate (default: 5e-5, optimized for Phi-3)")
-    parser.add_argument("--batch-size", type=int, default=4, help="Batch size (default: 4)")
-    parser.add_argument("--gradient-accumulation-steps", type=int, default=8,
-                       help="Gradient accumulation steps (default: 8)")
-    parser.add_argument("--num-epochs", type=int, default=3, help="Number of epochs (default: 3)")
-    parser.add_argument("--warmup-steps", type=int, default=50, help="Warmup steps (default: 50)")
-    parser.add_argument("--lr-scheduler-type", type=str, default="cosine",
-                       help="LR scheduler type (default: cosine, better for Phi-3)")
-    parser.add_argument("--save-steps", type=int, default=500, help="Save checkpoint every N steps")
-    parser.add_argument("--eval-steps", type=int, default=500, help="Evaluate every N steps")
-    parser.add_argument("--logging-steps", type=int, default=10, help="Log every N steps")
-    
-    # Other arguments
-    parser.add_argument("--load-in-4bit", action="store_true", default=None,
-                       help="Use 4-bit quantization (auto-detected if not specified)")
-    parser.add_argument("--no-4bit", action="store_true",
-                       help="Disable 4-bit quantization (use 16-bit)")
-    
+    parser = argparse.ArgumentParser()
+
+    # Paths
+    parser.add_argument("--train-path", required=True)
+    parser.add_argument("--val-path", required=True)
+    parser.add_argument("--output-dir", required=True)
+
+    # Model
+    parser.add_argument("--model-name", default="microsoft/Phi-3-mini-4k-instruct")
+    parser.add_argument("--max-seq-length", default=2048, type=int)
+
+    # LoRA
+    parser.add_argument("--lora-r", default=16, type=int)
+    parser.add_argument("--lora-alpha", default=32, type=int)
+    parser.add_argument("--lora-dropout", default=0.05, type=float)
+
+    # Training
+    parser.add_argument("--learning-rate", default=5e-5, type=float)
+    parser.add_argument("--batch-size", default=4, type=int)
+    parser.add_argument("--gradient-accumulation-steps", default=8, type=int)
+    parser.add_argument("--num-epochs", default=3, type=int)
+    parser.add_argument("--warmup-ratio", default=0.05, type=float)  # % based warmup
+    parser.add_argument("--logging-steps", default=10, type=int)
+
+    # Quantization
+    parser.add_argument("--no-4bit", action="store_true")
+
     args = parser.parse_args()
-    
-    # Auto-detect base directory if not provided
-    if args.base_dir:
-        base_dir = args.base_dir
-    else:
-        base_dir = detect_base_dir()
-        print(f"Auto-detected base directory: {base_dir}")
-    
-    # Set default paths if not provided
-    if not args.train_path:
-        args.train_path = os.path.join(base_dir, "train.jsonl")
-    if not args.val_path:
-        args.val_path = os.path.join(base_dir, "val.jsonl")
-    if not args.output_dir:
-        args.output_dir = os.path.join(base_dir, "models", "finetuned")
-    
-    # Check GPU
-    print("Checking GPU availability...")
+
+    # -------------------------------
+    # GPU Check
+    # -------------------------------
     if torch.cuda.is_available():
-        print(f"✓ GPU detected: {torch.cuda.get_device_name(0)}")
-        print(f"  CUDA version: {torch.version.cuda}")
-        print(f"  GPU memory: {torch.cuda.get_device_properties(0).total_memory / 1e9:.2f} GB")
+        name = torch.cuda.get_device_name(0)
+        mem_gb = torch.cuda.get_device_properties(0).total_memory / 1e9
+        print(f"✓ GPU: {name} — {mem_gb:.1f} GB")
     else:
-        print("⚠️  No GPU detected. Training will be slower on CPU.")
-        if not args.no_4bit:
-            args.no_4bit = True  # Disable 4-bit on CPU
-    
-    # Determine 4-bit usage
-    if args.no_4bit:
-        use_4bit = False
-    elif args.load_in_4bit:
-        use_4bit = True
-    else:
-        # Auto-detect
-        try:
-            import bitsandbytes as bnb
-            use_4bit = hasattr(bnb, 'cuda_available') and bnb.cuda_available() and torch.cuda.is_available()
-        except:
-            use_4bit = False
-    
-    # Load training data
-    print(f"\nLoading training data...")
-    print(f"  Train: {args.train_path}")
-    print(f"  Val: {args.val_path}")
-    
+        print("❌ No GPU detected — aborting, RunPod always should have GPU.")
+        sys.exit(1)
+
+    # -------------------------------
+    # Load JSONL
+    # -------------------------------
     train_data = load_jsonl(args.train_path)
     val_data = load_jsonl(args.val_path)
-    
-    if len(train_data) == 0:
-        raise ValueError(f"No training data found in {args.train_path}!")
-    if len(val_data) == 0:
-        raise ValueError(f"No validation data found in {args.val_path}!")
-    
-    print(f"✓ Loaded {len(train_data)} training examples and {len(val_data)} validation examples")
-    
+
+    train_ds = Dataset.from_list(train_data)
+    val_ds = Dataset.from_list(val_data)
+
+    # -------------------------------
     # Load model
-    print(f"\nLoading model: {args.model_name}")
-    print(f"Max sequence length: {args.max_seq_length}")
-    print(f"4-bit quantization: {use_4bit}")
-    
-    try:
-        model, tokenizer = FastLanguageModel.from_pretrained(
-            model_name=args.model_name,
-            max_seq_length=args.max_seq_length,
-            dtype=None,  # Auto detection
-            load_in_4bit=use_4bit,
-        )
-        if use_4bit:
-            print("✓ Model loaded with 4-bit quantization")
-        else:
-            print("✓ Model loaded in 16-bit precision")
-    except Exception as e:
-        if use_4bit:
-            print(f"⚠️  4-bit loading failed: {e}")
-            print("Falling back to 16-bit precision...")
-            model, tokenizer = FastLanguageModel.from_pretrained(
-                model_name=args.model_name,
-                max_seq_length=args.max_seq_length,
-                dtype=None,
-                load_in_4bit=False,
-            )
-            print("✓ Model loaded in 16-bit precision")
-        else:
-            raise
-    
-    # Add LoRA adapters
-    print("\nAdding LoRA adapters...")
+    # -------------------------------
+    use_4bit = (not args.no_4bit)
+
+    model, tokenizer = FastLanguageModel.from_pretrained(
+        model_name=args.model_name,
+        max_seq_length=args.max_seq_length,
+        load_in_4bit=use_4bit,
+        dtype=None,
+    )
+
+    print(f"✓ Loaded model ({'4-bit' if use_4bit else '16-bit'})")
+
+    # -------------------------------
+    # LoRA
+    # -------------------------------
+    print("Detecting LoRA modules...")
+    target_modules = detect_lora_modules(model)
+
     model = FastLanguageModel.get_peft_model(
         model,
         r=args.lora_r,
-        target_modules=["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
+        target_modules=target_modules,
         lora_alpha=args.lora_alpha,
         lora_dropout=args.lora_dropout,
         bias="none",
         use_gradient_checkpointing=True,
-        random_state=3407,
-        use_rslora=False,
-        loftq_config=None,
     )
-    print("✓ Model loaded with LoRA adapters")
-    
-    # Prepare datasets
-    print("\nPreparing datasets...")
-    train_dataset = Dataset.from_list(train_data)
-    val_dataset = Dataset.from_list(val_data)
-    
-    # Apply correct formatting
-    print("Applying Phi-3 chat template formatting...")
-    train_dataset = train_dataset.map(
-        lambda examples: formatting_prompts_func(examples, args.model_name),
-        batched=True
+    print(f"✓ LoRA enabled on {len(target_modules)} modules")
+
+    # -------------------------------
+    # Formatting
+    # -------------------------------
+    print("Applying prompt formatting...")
+
+    fmt_model_name = args.model_name
+
+    train_ds = train_ds.map(
+        lambda b: format_batch(b, fmt_model_name),
+        batched=True,
+        remove_columns=train_ds.column_names
     )
-    val_dataset = val_dataset.map(
-        lambda examples: formatting_prompts_func(examples, args.model_name),
-        batched=True
+
+    val_ds = val_ds.map(
+        lambda b: format_batch(b, fmt_model_name),
+        batched=True,
+        remove_columns=val_ds.column_names
     )
-    
-    print(f"✓ Created datasets: {len(train_dataset)} train, {len(val_dataset)} val")
-    
-    # Show sample
-    if len(train_dataset) > 0:
-        sample_text = train_dataset[0]["text"]
-        print(f"\nSample formatted text (first 200 chars):")
-        print(f"  {sample_text[:200]}...")
-    
-    # Create output directory
-    output_path = Path(args.output_dir)
-    output_path.mkdir(parents=True, exist_ok=True)
-    
-    # Training arguments
-    print("\nSetting up training arguments...")
+
+    # -------------------------------
+    # Trainer
+    # -------------------------------
+    print("Starting training...")
+
     training_args = TrainingArguments(
+        output_dir=args.output_dir,
         per_device_train_batch_size=args.batch_size,
+        per_device_eval_batch_size=args.batch_size,
         gradient_accumulation_steps=args.gradient_accumulation_steps,
-        warmup_steps=args.warmup_steps,
+        warmup_ratio=args.warmup_ratio,
         num_train_epochs=args.num_epochs,
         learning_rate=args.learning_rate,
-        fp16=not torch.cuda.is_bf16_supported() if torch.cuda.is_available() else False,
-        bf16=torch.cuda.is_bf16_supported() if torch.cuda.is_available() else False,
+        lr_scheduler_type="cosine",
         logging_steps=args.logging_steps,
-        optim="adamw_torch",
-        weight_decay=0.01,
-        lr_scheduler_type=args.lr_scheduler_type,
-        seed=3407,
-        output_dir=str(output_path),
-        save_steps=args.save_steps,
-        eval_steps=args.eval_steps,
-        evaluation_strategy="steps",
-        save_strategy="steps",
-        load_best_model_at_end=True,
-        report_to="none",
+        save_strategy="epoch",
+        eval_strategy="epoch",
+        fp16=not use_4bit,
     )
-    
-    # Create trainer
+
     trainer = SFTTrainer(
         model=model,
         tokenizer=tokenizer,
-        train_dataset=train_dataset,
-        eval_dataset=val_dataset,
-        dataset_text_field="text",
-        max_seq_length=args.max_seq_length,
+        train_dataset=train_ds,
+        eval_dataset=val_ds,
         args=training_args,
     )
-    
-    # Print training config
-    print("\n" + "="*60)
-    print("Training Configuration (optimized for Phi-3):")
-    print("="*60)
-    print(f"  Model: {args.model_name}")
-    print(f"  Epochs: {args.num_epochs}")
-    print(f"  Batch size: {args.batch_size} (effective: {args.batch_size * args.gradient_accumulation_steps})")
-    print(f"  Gradient accumulation steps: {args.gradient_accumulation_steps}")
-    print(f"  Learning rate: {args.learning_rate}")
-    print(f"  Warmup steps: {args.warmup_steps}")
-    print(f"  LR scheduler: {args.lr_scheduler_type}")
-    print(f"  Max sequence length: {args.max_seq_length}")
-    print(f"  LoRA r: {args.lora_r}, alpha: {args.lora_alpha}, dropout: {args.lora_dropout}")
-    print(f"  Output dir: {output_path}")
-    print("="*60)
-    
-    # Train
-    print("\nStarting training...")
+
     trainer.train()
-    
-    # Save model
-    print(f"\nSaving model to {output_path}...")
-    model.save_pretrained(str(output_path))
-    tokenizer.save_pretrained(str(output_path))
-    
-    # Save merged 16-bit model if using quantization
-    if use_4bit:
-        FastLanguageModel.for_inference(model)
-        merged_path = output_path / "merged_16bit"
-        model.save_pretrained_merged(
-            str(merged_path),
-            tokenizer,
-            save_method="merged_16bit",
-        )
-        print(f"✓ Merged 16-bit model saved to {merged_path}")
-    
-    print(f"\n✓ Training complete! Model saved to {output_path}")
-    return output_path
+    trainer.save_model()
+    tokenizer.save_pretrained(args.output_dir)
+
+    print("\n✓ Training complete!")
+    print(f"Model saved to: {args.output_dir}")
 
 
 if __name__ == "__main__":
-    try:
-        main()
-    except KeyboardInterrupt:
-        print("\n\n⚠️  Training interrupted by user")
-        sys.exit(1)
-    except Exception as e:
-        print(f"\n❌ Error during fine-tuning: {e}")
-        import traceback
-        traceback.print_exc()
-        sys.exit(1)
-
+    main()
